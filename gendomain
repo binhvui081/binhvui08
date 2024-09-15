@@ -1,143 +1,72 @@
-import requests
-import re
-import psutil
-import sys
 import random
 from faker import Faker
 import concurrent.futures
 import threading
 
-# Tool name you want to check
-nametool = "daodomain"
+# Email generation section
+fake = Faker()
+prefixes = ["info", "help", "support", "facebook", "admin", "orders", "hello", "contact", "sales", "service"]
+suffixes = [".com", ".net", ".org", ".info", ".biz", ".us", ".co", ".co.za", ".uk", ".co.uk", ".org.uk"]
 
-# List of HTTP debugging tools to check
-debug_tools = ['debugger', 'http_debugger', 'fiddler', 'charles', 'burp', 'HTTP Toolkit']
+def generate_username():
+    first_name = fake.first_name()
+    last_name = fake.last_name()
+    username = f"{first_name.lower()}{last_name.lower()}"
+    return username
 
-def check_debugging_tools():
-    # Check running processes for debugging tools
-    for proc in psutil.process_iter(['pid', 'name']):
-        try:
-            if any(tool.lower() in proc.info['name'].lower() for tool in debug_tools):
-                print(f"Detected debugging tool: {proc.info['name']}")
-                print("Please disable HTTP debugging tools and try again.")
-                return False
-        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-            continue
+def generate_email():
+    username = generate_username()
+    prefix = random.choice(prefixes)
+    suffix = random.choice(suffixes)
+    email = f"{prefix}@{username}{suffix}"
+    return email
 
+def generate_emails_chunk(num_emails, emails_set, lock):
+    local_emails = set()
+    while len(local_emails) < num_emails:
+        email = generate_email()
+        local_emails.add(email)
+    
+    with lock:
+        emails_set.update(local_emails)
 
-    return True
+def generate_emails(num_emails, filename, num_threads):
+    emails = set()
+    lock = threading.Lock()
 
-def check_key(key_needed):
-    url = f"https://binhpc.io.vn/check_key.php?key_needed={key_needed}"
+    chunk_size = num_emails // num_threads + (num_emails % num_threads > 0)
 
-    try:
-        response = requests.get(url)
-
-        if response.status_code == 200:
-            content = response.text
-            key_exists = "Success" in content
-
-            if key_exists:
-                match = re.search(r"Tên: (.*?)<br>Công cụ: (.*?)<br>Số ngày còn lại: (.*?) ngày", content)
-                if match:
-                    ten, cong_cu, so_ngay = match.groups()
-
-                    if nametool == cong_cu:
-                        print(f"Tên: {ten}")
-                        print(f"Công cụ: {cong_cu}")
-                        print(f"Số ngày còn lại: {so_ngay} ngày")
-                    else:
-                        print("Please use the correct tool.")
-                        sys.exit()
-
-                else:
-                    print("Unable to parse the response information.")
-                    sys.exit()
-
-            else:
-                print("Key does not exist.")
-                sys.exit()
-
-        else:
-            print(f"Request error, status code: {response.status_code}")
-            sys.exit()
-
-    except requests.RequestException as e:
-        print(f"Request error: {e}")
-        sys.exit()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
+        futures = [executor.submit(generate_emails_chunk, chunk_size, emails, lock) for _ in range(num_threads)]
+        concurrent.futures.wait(futures)
+    
+    while len(emails) < num_emails:
+        additional_emails = set()
+        while len(additional_emails) < (num_emails - len(emails)):
+            email = generate_email()
+            additional_emails.add(email)
+        with lock:
+            emails.update(additional_emails)
+    
+    with open(filename, 'w') as file:
+        for email in emails:
+            print(email)
+            file.write(email + '\n')
 
 if __name__ == "__main__":
-    if check_debugging_tools():
+    try:
         print("--------------------------------")
-        print("Đào Mail Domain Version 1.0")
-        print("Admin: t.me/vbprom")
+        num_emails_to_generate = int(input("Nhập Số Lượng Cần Gen : "))
+        if num_emails_to_generate <= 0:
+            raise ValueError("The number of emails must be a positive integer.")
+        
+        num_threads = int(input("Nhập Số Luồng : "))
         print("--------------------------------")
-        key_needed = input("Nhập Key: ")
-        check_key(key_needed)
-
-        # Email generation section
-        fake = Faker()
-        prefixes = ["info", "help", "support", "facebook", "admin", "orders", "hello", "contact", "sales", "service"]
-        suffixes = [".com", ".net", ".org", ".info", ".biz", ".us", ".co", ".co.za", ".uk", ".co.uk", ".org.uk"]
-
-        def generate_username():
-            first_name = fake.first_name()
-            last_name = fake.last_name()
-            username = f"{first_name.lower()}{last_name.lower()}"
-            return username
-
-        def generate_email():
-            username = generate_username()
-            prefix = random.choice(prefixes)
-            suffix = random.choice(suffixes)
-            email = f"{prefix}@{username}{suffix}"
-            return email
-
-        def generate_emails_chunk(num_emails, emails_set, lock):
-            local_emails = set()
-            while len(local_emails) < num_emails:
-                email = generate_email()
-                local_emails.add(email)
-            
-            with lock:
-                emails_set.update(local_emails)
-
-        def generate_emails(num_emails, filename, num_threads):
-            emails = set()
-            lock = threading.Lock()
-
-            chunk_size = num_emails // num_threads + (num_emails % num_threads > 0)
-
-            with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
-                futures = [executor.submit(generate_emails_chunk, chunk_size, emails, lock) for _ in range(num_threads)]
-                concurrent.futures.wait(futures)
-            
-            while len(emails) < num_emails:
-                additional_emails = set()
-                while len(additional_emails) < (num_emails - len(emails)):
-                    email = generate_email()
-                    additional_emails.add(email)
-                with lock:
-                    emails.update(additional_emails)
-            
-            with open(filename, 'w') as file:
-                for email in emails:
-                    print(email)
-                    file.write(email + '\n')
-
-        try:
-            print("--------------------------------")
-            num_emails_to_generate = int(input("Nhập Số Lượng Cần Gen : "))
-            if num_emails_to_generate <= 0:
-                raise ValueError("The number of emails must be a positive integer.")
-            
-            num_threads = int(input("Nhập Số Luồng : "))
-            print("--------------------------------")
-            if num_threads <= 0:
-                raise ValueError("The number of threads must be a positive integer.")
-        except ValueError as e:
-            print(f"Invalid input: {e}")
-        else:
-            output_filename = 'generated_emails.txt'
-            generate_emails(num_emails_to_generate, output_filename, num_threads)
-            print(f"{num_emails_to_generate} emails have been generated and saved to {output_filename}")
+        if num_threads <= 0:
+            raise ValueError("The number of threads must be a positive integer.")
+    except ValueError as e:
+        print(f"Invalid input: {e}")
+    else:
+        output_filename = 'generated_emails.txt'
+        generate_emails(num_emails_to_generate, output_filename, num_threads)
+        print(f"{num_emails_to_generate} emails have been generated and saved to {output_filename}")
