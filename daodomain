@@ -1,0 +1,251 @@
+import requests
+import base64
+import json
+import os
+import time
+import random
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import psutil
+import re
+
+# List of HTTP debugging tools to check
+debug_tools = ['debugger', 'http_debugger', 'fiddler', 'charles', 'burp', 'HTTP Toolkit']
+
+def check_debugging_tools():
+    # Check running processes for debugging tools
+    for proc in psutil.process_iter(['pid', 'name']):
+        try:
+            if any(tool.lower() in proc.info['name'].lower() for tool in debug_tools):
+                print(f"Phát hiện phần mềm gỡ lỗi: {proc.info['name']}")
+                print("Vui lòng tắt phần mềm gỡ lỗi HTTP và thử lại.")
+                return False
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            continue
+    return True
+
+# Base64 encode utility
+def base64_encode(app_collection_string):
+    encoded_bytes = base64.b64encode(app_collection_string.encode("utf-8"))
+    return encoded_bytes.decode("utf-8")
+
+# Load headers from headers.txt
+def load_headers(file_path):
+    headers = {}
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                if ': ' in line:
+                    key, value = line.strip().split(': ', 1)
+                    headers[key] = value
+    except FileNotFoundError:
+        print(f"File not found: {file_path}")
+    return headers
+
+# Load JSON data from data.txt
+def load_json(file_path):
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        print(f"File not found: {file_path}")
+        return {}
+
+# Decode Unicode escape characters
+def decode_unicode_escape(text):
+    return text.encode('utf-8').decode('unicode_escape')
+
+# Load UIDs from uid.txt
+def load_uids(file_path):
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            return [line.strip() for line in f]
+    except FileNotFoundError:
+        print(f"File not found: {file_path}")
+        return []
+
+# Load proxy tokens from proxy.txt
+def load_proxy_tokens(file_path):
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            tokens = [line.strip() for line in f]
+        return tokens if tokens else None
+    except FileNotFoundError:
+        print(f"File not found: {file_path}")
+        return None
+
+# Randomly select a proxy token
+def get_random_proxy_token(proxy_tokens):
+    if proxy_tokens:
+        return random.choice(proxy_tokens)
+    return None
+
+# Fetch proxy from API and store the next usage time
+proxy_cache = {
+    'proxy': None,
+    'next_proxy_time': 0
+}
+
+def get_new_proxy(proxy_tokens):
+    global proxy_cache
+    current_time = time.time()
+    proxy_token = get_random_proxy_token(proxy_tokens)
+    
+    # Fetch a new proxy if the cache has expired
+    if current_time >= proxy_cache['next_proxy_time']:
+        try:
+            response = requests.get(f"https://proxy.shoplike.vn/Api/getNewProxy?access_token={proxy_token}")
+            response_data = response.json()
+
+            if response_data['status'] == 'success':
+                proxy_cache['proxy'] = response_data['data']['proxy']
+                proxy_cache['next_proxy_time'] = current_time + 60  # Fixed time of 60 seconds
+                print(f"Get Success Proxy : {proxy_cache['proxy']}")
+            elif response_data['status'] == 'error':
+                proxy_cache['next_proxy_time'] = current_time + 60
+
+        except Exception as e:
+            pass
+            proxy_cache['proxy'] = None
+
+    return proxy_cache['proxy']
+
+# Check if email contains specific keywords
+def is_specific_keyword(email):
+    keywords = ["gmail", "yahoo", "hotmail", "aol", "email", "icloud", "outlook", "protonmail", "mail", "live", "gmx", "freenet", "onet"]
+    return any(keyword in email for keyword in keywords)
+
+# Update terminal window title
+def update_title(success_count, fail_count, total_uids, elapsed_time):
+    processed = success_count + fail_count
+    cpm = processed / (elapsed_time / 60)
+    title = (f"Đào Mail Domain Version 1.0 - Processed: {processed}/{total_uids} - Hit: {success_count} - Bad: {fail_count} - "
+             f"CPM: {int(cpm)} - Admin: t.me/vbprom")
+    os.system(f"title {title}")
+
+# Process each UID
+def process_uid(uid, email_set, counters, proxy_tokens):
+    app_collection = f"app_collection:{uid}:2409997254:96"
+    encoded_app_collection = base64_encode(app_collection)
+
+    url = "https://www.facebook.com/api/graphql/"
+    headers = load_headers('data/headers.txt')
+    data = load_json('data/data.txt')
+
+    if 'variables' in data:
+        data['variables'] = data['variables'].replace("encoded_app_collection", encoded_app_collection)
+    else:
+        print("Data format incorrect or 'variables' key missing.")
+        return
+
+    proxy = get_new_proxy(proxy_tokens)
+    proxies = {"http": f"http://{proxy}", "https": f"http://{proxy}"} if proxy else None
+
+    try:
+        response = requests.post(url, headers=headers, data=data, proxies=proxies)
+        response.raise_for_status()
+    except requests.RequestException as e:
+        pass
+        return
+
+    source = response.text
+    emails_specific_keyword = []
+    emails_other = []
+
+    if '"edges":[],"page_info"' in source:
+        return
+    elif '"edges":[{"node"' in source:
+        page_ids = []
+        search_str = 'Page","id":"'
+        start = 0
+
+        while True:
+            start = source.find(search_str, start)
+            if start == -1:
+                break
+            start += len(search_str)
+            end = source.find('"', start)
+            page_id = source[start:end]
+            page_ids.append(page_id)
+            start = end
+
+        payload_template = load_json('data/payload.txt')
+
+        for page_id in page_ids:
+            payload = json.loads(json.dumps(payload_template).replace("page_id", page_id))
+            try:
+                response = requests.post(url, headers=headers, data=payload, proxies=proxies)
+                response.raise_for_status()
+            except requests.RequestException as e:
+                pass
+                continue
+
+            if "email\":null" in response.text:
+                continue
+            elif "email\":{\"text\":\"" in response.text:
+                start = response.text.find("email\":{\"text\":\"") + len("email\":{\"text\":\"")
+                end = response.text.find("\"", start)
+                email = response.text[start:end]
+                email = decode_unicode_escape(email)
+
+                if email not in email_set:
+                    email_set.add(email)
+                    if is_specific_keyword(email):
+                        emails_specific_keyword.append(email)
+                    else:
+                        emails_other.append(email)
+
+    with open('email.txt', 'a', encoding='utf-8') as f:
+        for email in emails_specific_keyword:
+            f.write(f"{email}\n")
+
+    with open('domain.txt', 'a', encoding='utf-8') as f:
+        for email in emails_other:
+            print(f"{email}")
+            f.write(f"{email}\n")
+
+    counters['processed'] += 1
+    counters['hits'] += len(emails_specific_keyword)
+    counters['fails'] += len(emails_other)
+
+    elapsed_time = time.time() - counters['start_time']
+    update_title(counters['hits'], counters['fails'], counters['total'], elapsed_time)
+
+# Main function with multi-threading
+def main():
+    nametool = "daodomain"
+    uids = load_uids('uid.txt')
+    email_set = set()
+
+    proxy_tokens = load_proxy_tokens('proxy.txt')
+    if not proxy_tokens:
+        print("Proxy tokens not found.")
+        return
+
+    counters = {
+        'processed': 0,
+        'total': len(uids),
+        'hits': 0,
+        'fails': 0,
+        'start_time': time.time()
+    }
+
+    # Check for debugging tools
+    if not check_debugging_tools():
+        return
+
+    # User inputs the number of threads
+    print("--------------------------------")
+    num_threads = int(input("Enter the number of threads : "))
+    print("--------------------------------")
+    # Use ThreadPoolExecutor for multi-threading
+    with ThreadPoolExecutor(max_workers=num_threads) as executor:
+        futures = [executor.submit(process_uid, uid, email_set, counters, proxy_tokens) for uid in uids]
+
+        for future in as_completed(futures):
+            try:
+                future.result()
+            except Exception as e:
+                pass
+
+if __name__ == "__main__":
+    main()
